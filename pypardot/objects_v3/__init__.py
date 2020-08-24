@@ -12,7 +12,7 @@ from .visits import Visits
 from .visitors import Visitors
 from .visitoractivities import VisitorActivities
 from .campaigns import Campaigns
-
+from .importapi import Import
 
 def load_objects(client):
     client.lists = Lists(client)
@@ -25,3 +25,4 @@ def load_objects(client):
     client.visitors = Visitors(client)
     client.visitoractivities = VisitorActivities(client)
     client.campaigns = Campaigns(client)
+    client.importapi = Import(client)

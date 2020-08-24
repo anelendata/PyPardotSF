@@ -28,7 +28,7 @@ class PardotAPI(object):
             from .objects import load_objects
         load_objects(self)
 
-    def post(self, object_name, path=None, params=None, retries=0):
+    def post(self, object_name, path=None, params=None, retries=0, headers=None, files=None):
         """
         Makes a POST request to the API. Checks for invalid requests that raise PardotAPIErrors. If the API key is
         invalid, one re-authentication request is made, in case the key has simply expired. If no errors are raised,
@@ -37,9 +37,16 @@ class PardotAPI(object):
         if params is None:
             params = {}
         params.update({'user_key': self.user_key, 'api_key': self.api_key, 'format': 'json'})
+
+        # if headers is None:
+        #    headers = {"Content-Type": "application/json"}
+
         try:
             self._check_auth(object_name=object_name)
-            request = requests.post(self._full_path(object_name, self.version, path), data=params)
+            request = requests.post(self._full_path(object_name, self.version, path),
+                                    data=params,
+                                    headers=headers,
+                                    files=files)
             response = self._check_response(request)
             return response
         except PardotAPIError as err:
@@ -48,6 +55,35 @@ class PardotAPI(object):
                 return response
             else:
                 raise err
+
+    def patch(self, object_name, path=None, params=None, retries=0, headers=None, files=None):
+        """
+        Makes a POST request to the API. Checks for invalid requests that raise PardotAPIErrors. If the API key is
+        invalid, one re-authentication request is made, in case the key has simply expired. If no errors are raised,
+        returns either the JSON response, or if no JSON was returned, returns the HTTP response status code.
+        """
+        if params is None:
+            params = {}
+        params.update({'user_key': self.user_key, 'api_key': self.api_key, 'format': 'json'})
+
+        # if headers is None:
+        #    headers = {"Content-Type": "application/json"}
+
+        try:
+            self._check_auth(object_name=object_name)
+            request = requests.patch(self._full_path(object_name, self.version, path),
+                                     data=params,
+                                     headers=headers,
+                                     files=files)
+            response = self._check_response(request)
+            return response
+        except PardotAPIError as err:
+            if err.message == 'Invalid API key or user key':
+                response = self._handle_expired_api_key(err, retries, 'post', object_name, path, params)
+                return response
+            else:
+                raise err
+
 
     def get(self, object_name, path=None, params=None, retries=0):
         """
@@ -107,7 +143,8 @@ class PardotAPI(object):
                 raise PardotAPIError(json_response=json)
             return json
         else:
-            return response.status_code
+            return response
+            # return response.status_code
 
     def _check_auth(self, object_name):
         if object_name == 'login':
