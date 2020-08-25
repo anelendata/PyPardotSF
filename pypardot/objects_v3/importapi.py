@@ -1,3 +1,5 @@
+import json
+
 class Import(object):
     """
     A class to query and use Pardot Import API.
@@ -13,18 +15,20 @@ class Import(object):
         Prarams(as importInput if file_name is not null):
         {
           "operation": "Upsert",
-          "object": "Prospect"
+          "object": "Prospect",
+          "state": "Ready"
         }
         """
         if not file_name:
-            response = self._post(path='/do/create', params=kwargs)
-            return reponse
+            headers = {"Content-Type": "application/json"}
+            response = self._post(path='/do/create', json=kwargs, headers=headers)
+            return response
 
         with open(file_name, "rb") as f:
             files = {"importFile": f}
-            headers = {"Content-Type": "multipart/form-data"}
-            response = self._post(path='/do/create', params=kwargs,
-                                  headers=headers,
+            params = {"importInput": json.dumps(kwargs)}
+            response = self._post(path='/do/create',
+                                  params=params,
                                   files=files)
         return response
 
@@ -34,11 +38,9 @@ class Import(object):
         """
         with open(file_name, "rb") as f:
             files = {"importFile": f}
-            headers = {"Content-Type": "multipart/form-data"}
             response = self._post(path='/do/batch/id/{id}'.format(id=id),
                                   params=kwargs,
-                                  files=files,
-                                  headers=headers)
+                                  files=files)
 
         return response
 
@@ -46,8 +48,8 @@ class Import(object):
         """Used to submit the import by changing the state to "Ready". After this step, no more batches of data can be added, and processing of the import begins.
         """
         headers = {"Content-Type": "application/json"}
-        response = self._patch(path='/do/update/id/{id}'.format(id=id), params=kwargs,
-                               headers=headers)
+        response = self._patch(path='/do/update/id/{id}'.format(id=id),
+                               json=kwargs, headers=headers)
         return response
 
     def read(self, id=None, **kwargs):
@@ -84,19 +86,17 @@ class Import(object):
         return response
 
     def _post(self, object_name='import', path=None, params=None,
-              headers=None, files=None):
+              headers=None, json=None, files=None):
         """POST requests for the Account object."""
-        if params is None:
-            params = {}
         response = self.client.post(object_name=object_name, path=path,
-                                    params=params, headers=headers, files=files)
+                                    params=params, headers=headers,
+                                    json=json, files=files)
         return response
 
     def _patch(self, object_name='import', path=None, params=None,
-              headers=None, files=None):
+              headers=None, json=None, files=None):
         """POST requests for the Account object."""
-        if params is None:
-            params = {}
         response = self.client.patch(object_name=object_name, path=path,
-                                    params=params, headers=headers, files=files)
+                                     params=params, headers=headers,
+                                     json=json, files=files)
         return response
