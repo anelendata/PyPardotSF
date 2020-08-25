@@ -61,11 +61,11 @@ class PardotAPI(object):
                                     files=files,
                                     json=json)
 
-            # import/add_batch returns an empty response
+            # some endpoints (import/add_batch) returns an empty response
             if request.content:
                 response = self._check_response(request)
                 return response
-            return request
+            return None
         except PardotAPIError as err:
             if err.message == 'Invalid API key or user key':
                 response = self._handle_expired_api_key(err, retries, 'post', object_name, path, data)
@@ -109,7 +109,7 @@ class PardotAPI(object):
             if request.content:
                 response = self._check_response(request)
                 return response
-            return request
+            return None
         except PardotAPIError as err:
             if err.message == 'Invalid API key or user key':
                 response = self._handle_expired_api_key(err, retries, 'post', object_name, path, data)
@@ -176,7 +176,7 @@ class PardotAPI(object):
                 raise PardotAPIError(json_response=json)
             return json
         else:
-            return response
+            return response.status_code
 
     def _check_auth(self, object_name):
         if object_name == 'login':

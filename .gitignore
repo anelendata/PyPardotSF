@@ -1,3 +1,5 @@
+venv
+
 # Python byte code files
 *.pyc
 
