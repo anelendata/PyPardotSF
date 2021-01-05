@@ -16,14 +16,18 @@ BASE_URI = 'https://pi.pardot.com'
 
 class PardotAPI(object):
     def __init__(self, email=None, password=None, user_key=None,
-                 token=None, business_unit_id=None,
+                 sf_consumer_key=None, sf_consumer_secret=None,
+                 sf_refresh_token=None, business_unit_id=None,
                  version=4):
         self.email = email
         self.password = password
         self.user_key = user_key
         self.api_key = None
         self.version = version
-        self.token = token
+        self.sftoken = "dummy"  # trigger refresh token
+        self.sftoken_refresh = sf_refresh_token
+        self.sf_consumer_key = sf_consumer_key
+        self.sf_consumer_secret = sf_consumer_secret
         self.business_unit_id = business_unit_id
         self._load_objects()
 
@@ -63,10 +67,10 @@ To find the Pardot Business Unit ID, use Setup in Salesforce. From Setup, enter 
     3. Type 'app manager' and select App Manager from the Quick Find on the left pane
     4. Find the target Connected App and click on the down arrow and select view.""")
             sys.stdout.write("What is your consumer key?: ")
-            consumer_key = input()
+            self.sf_consumer_key = input()
             sys.stdout.write("What is your consumer secret?: ")
-            consumer_secret = input()
-        url = f"https://{instance_id}.salesforce.com/services/oauth2/authorize?response_type=code&client_id={consumer_key}&redirect_uri=https://login.salesforce.com/"
+            self.sf_consumer_secret = input()
+        url = f"https://{instance_id}.salesforce.com/services/oauth2/authorize?response_type=code&client_id={self.sf_consumer_key}&redirect_uri=https://login.salesforce.com/"
         print(f"""\nOpen the following page in a browser {url}.
 Allow access if any alert popup. You will be redirected to a login page, but do not login.""")
         sys.stdout.write("Copy and page the entire URL of the login page that contains code: ")
@@ -74,16 +78,31 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
         parsed = urlparse(new_url)
         code = parse_qs(parsed.query)["code"][0]
 
-        post_url = f"https://login.salesforce.com/services/oauth2/token?code={code}&grant_type=authorization_code&client_id={consumer_key}&client_secret={consumer_secret}&redirect_uri=https://login.salesforce.com/"
+        post_url = f"https://login.salesforce.com/services/oauth2/token?code={code}&grant_type=authorization_code&client_id={self.sf_consumer_key}&client_secret={self.sf_consumer_secret}&redirect_uri=https://login.salesforce.com/"
         response = requests.post(post_url).json()
-        self.token = response.get("access_token")
-        if self.token:
-            print("Token is set!")
-        else:
-            print("Failed to obtain token")
-            print(post_url)
-            print(response)
+        self.sftoken = response.get("access_token")
+        self.sftoken_refresh = response.get("refresh_token")
+        if not self.sftoken:
+            raise Exception("Failed to obtain token %s" % response)
 
+    def revoke_sf_token(self):
+        url = "https://login.salesforce.com/services/oauth2/revoke"
+        header = {"Content-Type": "application/x-www-form-urlencoded"}
+        response = requests.post(url,
+                                 data={"token": self.sftoken})
+        if response.status_code >= 400:
+            raise Exception(response)
+
+    def refresh_sf_token(self):
+        url = "https://login.salesforce.com/services/oauth2/token"
+        data = {"grant_type": "refresh_token",
+                "client_id": self.sf_consumer_key,
+                "client_secret": self.sf_consumer_secret,
+                "refresh_token": self.sftoken_refresh}
+        response = requests.post(url, data=data).json()
+        self.sftoken = response.get("access_token")
+        if not self.sftoken:
+            raise Exception("Failed to refresh token: " + response)
 
     def post(self, object_name, path=None,
               headers=None, params=None, data=None, json=None, files=None,
@@ -95,7 +114,7 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
         """
         if headers is None:
             headers = {}
-        if self.api_key or self.token:
+        if self.api_key or self.sftoken:
             auth_headers = self._build_auth_header()
             headers.update(auth_headers)
 
@@ -127,6 +146,9 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             if err.message == 'Invalid API key or user key':
                 response = self._handle_expired_api_key(err, retries, 'post', object_name, path, data)
                 return response
+            elif err.message == 'access_token is invalid, unknown, or malformed':
+                response = self._handle_expired_token(err, retries, 'post', object_name, path, data)
+                return response
             else:
                 raise err
 
@@ -140,7 +162,8 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
         """
         if headers is None:
             headers = {}
-        if self.api_key:
+
+        if self.api_key or self.sftoken:
             auth_headers = self._build_auth_header()
             headers.update(auth_headers)
 
@@ -169,7 +192,10 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             return None
         except PardotAPIError as err:
             if err.message == 'Invalid API key or user key':
-                response = self._handle_expired_api_key(err, retries, 'post', object_name, path, data)
+                response = self._handle_expired_api_key(err, retries, 'patch', object_name, path, data)
+                return response
+            elif err.message == 'access_token is invalid, unknown, or malformed':
+                response = self._handle_expired_token(err, retries, 'patch', object_name, path, data)
                 return response
             else:
                 raise err
@@ -194,6 +220,9 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             if err.message == 'Invalid API key or user key':
                 response = self._handle_expired_api_key(err, retries, 'get', object_name, path, params)
                 return response
+            elif err.message == 'access_token is invalid, unknown, or malformed':
+                response = self._handle_expired_token(err, retries, 'get', object_name, path, data)
+                return response
             else:
                 raise err
 
@@ -206,6 +235,21 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             raise err
         self.api_key = None
         if self.authenticate():
+            response = getattr(self, method)(object_name=object_name, path=path, params=params, retries=1)
+            return response
+        else:
+            raise err
+
+    def _handle_expired_token(self, err, retries, method, object_name, path, params):
+        """
+        Tries to refresh an expired token and re-issue the HTTP request. If the refresh has already been attempted,
+        an error is raised.
+        """
+        if retries != 0:
+            raise err
+        self.sftoken = None
+        self.refresh_sf_token()
+        if self.sftoken:
             response = getattr(self, method)(object_name=object_name, path=path, params=params, retries=1)
             return response
         else:
@@ -262,8 +306,8 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
         """
         Builds Pardot Authorization Header to be used with GET requests
         """
-        if self.token and self.business_unit_id:
-            return {"Authorization": "Bearer " + self.token, "Pardot-Business-Unit-Id": self.business_unit_id}
+        if self.sftoken and self.business_unit_id:
+            return {"Authorization": "Bearer " + self.sftoken, "Pardot-Business-Unit-Id": self.business_unit_id}
         if not self.user_key or not self.api_key:
             raise Exception('Cannot build Authorization header. user or api key is empty')
         auth_string = 'Pardot api_key=%s, user_key=%s' % (self.api_key, self.user_key)
