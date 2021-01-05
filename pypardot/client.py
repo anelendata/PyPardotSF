@@ -1,4 +1,6 @@
 import requests
+import sys
+from urllib.parse import parse_qs, urlparse
 
 from .errors import PardotAPIError
 
@@ -13,12 +15,16 @@ BASE_URI = 'https://pi.pardot.com'
 
 
 class PardotAPI(object):
-    def __init__(self, email, password, user_key, version=4):
+    def __init__(self, email=None, password=None, user_key=None,
+                 token=None, business_unit_id=None,
+                 version=4):
         self.email = email
         self.password = password
         self.user_key = user_key
         self.api_key = None
         self.version = version
+        self.token = token
+        self.business_unit_id = business_unit_id
         self._load_objects()
 
     def _load_objects(self):
@@ -27,6 +33,57 @@ class PardotAPI(object):
         else:
             from .objects import load_objects
         load_objects(self)
+
+    def setup_salesforce_auth_keys(self, instance_id=None, business_unit_id=None, consumer_key=None, consumer_secret=None):
+        print("""If you have not created Connected App, do the following:
+    1. Login to Salesforce. Switch to Lightening Experience if on classic (right-top link).
+    2. Cog->Setup (right top)
+    3. Type 'app manager' and select App Manager from the Quick Find on the left pane
+       (If you cannot see App Manager, follow this: https://help.salesforce.com/articleView?id=000322274&type=1&mode=1 )
+    5. Click on the New Connected App (in the upper right corner).
+    6. On the New Connected App page, fill the following required fields under Basic Information: Connected App Name, API Name and Contact Email.
+    7. Go to API (Enable OAuth Settings), and select Enable OAuth Settings. In the Callback URL field, enter https://login.salesforce.com/. In the Selected OAuth Scopes field, select Access and manage your data (api), Perform requests on your behalf at any time (refresh_token, offline_access), Provide access to your data via the Web (web), Access Pardot services (pardot_api), and then click Add.
+    8. Click the Save button to save the new Connected App.
+    Credit: Instruction adopted from https://medium.com/@bpmmendis94/obtain-access-refresh-tokens-from-salesforce-rest-api-a324fe4ccd9b#:~:text=In%20the%20left%2Dhand%20pane,and%20select%20Enable%20OAuth%20Settings""")
+        if not instance_id:
+            print("""Get your instance ID:
+Login to Salesforce and grab the first part of URL (ex. na112 for https://na112.lightning.force.com/)""")
+            sys.stdout.write("What is your instance ID?: ")
+            instance_id = input()
+        if not business_unit_id:
+            print("""Get your Pardot business unit ID
+To find the Pardot Business Unit ID, use Setup in Salesforce. From Setup, enter "Pardot Account Setup" in the Quick Find box. Your Pardot Business Unit ID begins with "0Uv" and is 18 characters long. If you cannot access the Pardot Account Setup information, ask your Salesforce Administrator to provide you with the Pardot Business Unit ID.
+(From https://developer.pardot.com/kb/authentication/ )""")
+            sys.stdout.write("What is your business unit ID?: ")
+            self.business_unit_id = input()
+        if not consumer_key or not consumer_secret:
+            print("""Get your consumer key:
+    1. Login to Salesforce. Switch to Lightening Experience if on classic (right-top link).
+    2. Cog->Setup (right top)
+    3. Type 'app manager' and select App Manager from the Quick Find on the left pane
+    4. Find the target Connected App and click on the down arrow and select view.""")
+            sys.stdout.write("What is your consumer key?: ")
+            consumer_key = input()
+            sys.stdout.write("What is your consumer secret?: ")
+            consumer_secret = input()
+        url = f"https://{instance_id}.salesforce.com/services/oauth2/authorize?response_type=code&client_id={consumer_key}&redirect_uri=https://login.salesforce.com/"
+        print(f"""\nOpen the following page in a browser {url}.
+Allow access if any alert popup. You will be redirected to a login page, but do not login.""")
+        sys.stdout.write("Copy and page the entire URL of the login page that contains code: ")
+        new_url = input()
+        parsed = urlparse(new_url)
+        code = parse_qs(parsed.query)["code"][0]
+
+        post_url = f"https://login.salesforce.com/services/oauth2/token?code={code}&grant_type=authorization_code&client_id={consumer_key}&client_secret={consumer_secret}&redirect_uri=https://login.salesforce.com/"
+        response = requests.post(post_url).json()
+        self.token = response.get("access_token")
+        if self.token:
+            print("Token is set!")
+        else:
+            print("Failed to obtain token")
+            print(post_url)
+            print(response)
+
 
     def post(self, object_name, path=None,
               headers=None, params=None, data=None, json=None, files=None,
@@ -38,7 +95,7 @@ class PardotAPI(object):
         """
         if headers is None:
             headers = {}
-        if self.api_key:
+        if self.api_key or self.token:
             auth_headers = self._build_auth_header()
             headers.update(auth_headers)
 
@@ -205,6 +262,8 @@ class PardotAPI(object):
         """
         Builds Pardot Authorization Header to be used with GET requests
         """
+        if self.token and self.business_unit_id:
+            return {"Authorization": "Bearer " + self.token, "Pardot-Business-Unit-Id": self.business_unit_id}
         if not self.user_key or not self.api_key:
             raise Exception('Cannot build Authorization header. user or api key is empty')
         auth_string = 'Pardot api_key=%s, user_key=%s' % (self.api_key, self.user_key)
