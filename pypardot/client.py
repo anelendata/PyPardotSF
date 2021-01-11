@@ -1,3 +1,4 @@
+import logging
 import requests
 import sys
 from urllib.parse import parse_qs, urlparse
@@ -12,6 +13,8 @@ except ImportError:
     import simplejson as json
 
 BASE_URI = 'https://pi.pardot.com'
+
+logger = logging.getLogger(__name__)
 
 
 class PardotAPI(object):
@@ -87,7 +90,7 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
 
     def revoke_sf_token(self):
         url = "https://login.salesforce.com/services/oauth2/revoke"
-        header = {"Content-Type": "application/x-www-form-urlencoded"}
+        # header = {"Content-Type": "application/x-www-form-urlencoded"}
         response = requests.post(url,
                                  data={"token": self.sftoken})
         if response.status_code >= 400:
@@ -102,7 +105,7 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
         response = requests.post(url, data=data).json()
         self.sftoken = response.get("access_token")
         if not self.sftoken:
-            raise Exception("Failed to refresh token: " + response)
+            raise Exception(f"Failed to refresh token: {response}")
 
     def post(self, object_name, path=None,
               headers=None, params=None, data=None, json=None, files=None,
@@ -128,6 +131,10 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             if 'password' in data.keys():
                 data.update({'user_key': self.user_key, 'api_key': self.api_key})
 
+        if files:
+            for _, f in files.items():
+                f.seek(0)
+
         try:
             self._check_auth(object_name=object_name)
             request = requests.post(self._full_path(object_name, self.version, path),
@@ -144,10 +151,12 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             return None
         except PardotAPIError as err:
             if err.message == 'Invalid API key or user key':
-                response = self._handle_expired_api_key(err, retries, 'post', object_name, path, data)
+                response = self._handle_expired_api_key(
+                    err, retries, 'post', headers, object_name, path, params, data, files)
                 return response
             elif err.message == 'access_token is invalid, unknown, or malformed':
-                response = self._handle_expired_token(err, retries, 'post', object_name, path, data)
+                response = self._handle_expired_token(
+                    err, retries, 'post', headers, object_name, path, params, data, files)
                 return response
             else:
                 raise err
@@ -192,16 +201,18 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             return None
         except PardotAPIError as err:
             if err.message == 'Invalid API key or user key':
-                response = self._handle_expired_api_key(err, retries, 'patch', object_name, path, data)
+                response = self._handle_expired_api_key(
+                    err, retries, 'patch', headers, object_name, path, params, data, files)
                 return response
             elif err.message == 'access_token is invalid, unknown, or malformed':
-                response = self._handle_expired_token(err, retries, 'patch', object_name, path, data)
+                response = self._handle_expired_token(
+                    err, retries, 'patch', headers, object_name, path, params, data, files)
                 return response
             else:
                 raise err
 
 
-    def get(self, object_name, path=None, params=None, retries=0):
+    def get(self, object_name, path=None, params=None, retries=0, **kwargs):
         """
         Makes a GET request to the API. Checks for invalid requests that raise PardotAPIErrors. If the API key is
         invalid, one re-authentication request is made, in case the key has simply expired. If no errors are raised,
@@ -218,15 +229,17 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             return response
         except PardotAPIError as err:
             if err.message == 'Invalid API key or user key':
-                response = self._handle_expired_api_key(err, retries, 'get', object_name, path, params)
+                response = self._handle_expired_api_key(
+                    err, retries, 'get', headers, object_name, path, params)
                 return response
             elif err.message == 'access_token is invalid, unknown, or malformed':
-                response = self._handle_expired_token(err, retries, 'get', object_name, path, data)
+                response = self._handle_expired_token(
+                    err, retries, 'get', headers, object_name, path, params)
                 return response
             else:
                 raise err
 
-    def _handle_expired_api_key(self, err, retries, method, object_name, path, params):
+    def _handle_expired_api_key(self, err, retries, method, headers, object_name, path, params, data=None, files=None):
         """
         Tries to refresh an expired API key and re-issue the HTTP request. If the refresh has already been attempted,
         an error is raised.
@@ -235,12 +248,14 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
             raise err
         self.api_key = None
         if self.authenticate():
-            response = getattr(self, method)(object_name=object_name, path=path, params=params, retries=1)
+            response = getattr(self, method)(
+                object_name=object_name, path=path, params=params, data=data,
+                files=files, headers=headers, retries=1)
             return response
         else:
             raise err
 
-    def _handle_expired_token(self, err, retries, method, object_name, path, params):
+    def _handle_expired_token(self, err, retries, method, headers, object_name, path, params, data=None, files=None):
         """
         Tries to refresh an expired token and re-issue the HTTP request. If the refresh has already been attempted,
         an error is raised.
@@ -250,7 +265,9 @@ Allow access if any alert popup. You will be redirected to a login page, but do 
         self.sftoken = None
         self.refresh_sf_token()
         if self.sftoken:
-            response = getattr(self, method)(object_name=object_name, path=path, params=params, retries=1)
+            response = getattr(self, method)(
+                object_name=object_name, path=path, params=params, data=data,
+                files=files, headers=headers, retries=1)
             return response
         else:
             raise err
